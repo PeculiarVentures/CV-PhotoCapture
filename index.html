@@ -1,0 +1,478 @@
+<!doctype html>
+
+<html lang="en">
+    <head>
+        <title>Ryan Project.</title>
+        <link rel="stylesheet" href="css/bootstrap.css">
+        <link rel="stylesheet" href="css/jsfeat.css">
+    </head>
+    <body>
+		<div id="dpi"></div>
+		<video id="webcam" width="640" height="480" style="display:none;"></video>
+		<div style=" width:640px;height:480px;margin: 10px auto;">
+			<canvas id="canvas" width="640" height="480"></canvas>
+			<div id="no_rtc" class="alert alert-error" style="display:none;"></div>
+			<div id="warning_board" class="alert alert-error" style="display:none;"></div>
+			<div id="recognition_status" class="alert alert-info""></div>
+			<div align="center"> 
+				<canvas id="facecanvas"></canvas>
+			</div>
+			<div align="center">
+				<button id="refreshbutton">Refresh</button>
+			</div>
+		</div>
+
+        <script type="text/javascript" src="js/jquery.js"></script>
+        <script type="text/javascript" src="js/jsfeat-min.js"></script>
+        <script type="text/javascript" src="js/frontalface.js"></script>
+        <script type="text/javascript" src="js/compatibility.js"></script>
+        <script type="text/javascript" src="js/profiler.js"></script>
+        <script type="text/javascript" src="js/dat.gui.min.js"></script>
+		<script src="js/objectdetect.js"></script>
+		<script src="js/objectdetect.mouth.js"></script>
+		<script src="js/objectdetect.eye.js"></script>
+		<script src="js/global.js"></script>
+		<script src="js/motiondetector.imagecompare.js"></script>
+        <script type="text/javascript">
+        $(window).load(function() {
+            "use strict";
+            
+            var video = document.getElementById('webcam');
+            var canvas = document.getElementById('canvas');
+			var refreshbutton = document.getElementById('refreshbutton');
+            try {
+                var attempts = 0;
+                var readyListener = function(event) {
+                    findVideoSize();
+                };
+                var findVideoSize = function() {
+                    if(video.videoWidth > 0 && video.videoHeight > 0) {
+                        video.removeEventListener('loadeddata', readyListener);
+                        onDimensionsReady(video.videoWidth, video.videoHeight);
+                    } else {
+                        if(attempts < 10) {
+                            attempts++;
+                            setTimeout(findVideoSize, 200);
+                        } else {
+                            onDimensionsReady(640, 480);
+                        }
+                    }
+                };
+                var onDimensionsReady = function(width, height) {
+                    demo_app(width, height);
+                    compatibility.requestAnimationFrame(tick);
+                };
+
+                video.addEventListener('loadeddata', readyListener);
+
+                compatibility.getUserMedia({video: true}, function(stream) {
+                    try {
+                        video.src = compatibility.URL.createObjectURL(stream);
+                    } catch (error) {
+                        video.src = stream;
+                    }
+                    setTimeout(function() {
+                            video.play();
+                        }, 500);
+                }, function (error) {
+                    $('#canvas').hide();
+                    $('#no_rtc').html('<h4>WebRTC not available.</h4>');
+                    $('#no_rtc').show();
+                });
+            } catch (error) {
+                $('#canvas').hide();
+                $('#no_rtc').html('<h4>Something goes wrong...</h4>');
+                $('#no_rtc').show();
+            }
+
+            var stat = new profiler();
+			
+            var gui,options,ctx,canvasWidth,canvasHeight;
+            var img_u8,facedetection_canvas,facedetection_ctx, eyemouthdetection_canvas, eyemouthdetection_ctx, ii_sum,ii_sqsum,ii_tilted,edg,ii_canny;
+            var classifier = jsfeat.haar.frontalface;
+			var detector;
+
+            var facedetection_work_size = 160;
+            var eyemouthdetection_work_size = 140;
+
+			var bProcessing = true;
+
+            var demo_opt = function(){
+                this.min_scale = 2;
+                this.scale_factor = 1.15;
+                this.use_canny = false;
+                this.edges_density = 0.13;
+                this.equalize_histogram = true;
+            }
+
+			//motion detect
+			var imageCompare;
+			var motiondetect_width = 64;
+			var motiondetect_height = 48;
+
+			var currentImage = null;
+			var oldImage = null;
+			//
+			
+			var bMoveFaceBack = true;
+			var bMoveFaceHorizontal = true;
+			var bMoveFaceVertical = true;
+			var nConsistentDark = 0;
+			var nConsistentMoveBack = 0;
+			var nConsistentMoveHorizontal = 0;
+			var nConsistentMoveVertical = 0;
+			var nConsistentStable = 0;
+
+            function demo_app(videoWidth, videoHeight) {
+                canvasWidth  = canvas.width;
+                canvasHeight = canvas.height;
+                ctx = canvas.getContext('2d');
+
+                ctx.fillStyle = "rgb(0,255,0)";
+                ctx.strokeStyle = "rgb(0,255,0)";
+				ctx.lineWidth = 2;
+
+                var scale = Math.min(facedetection_work_size/videoWidth, facedetection_work_size/videoHeight);
+                var w = (videoWidth*scale)|0;
+                var h = (videoHeight*scale)|0;
+
+                img_u8 = new jsfeat.matrix_t(w, h, jsfeat.U8_t | jsfeat.C1_t);
+                edg = new jsfeat.matrix_t(w, h, jsfeat.U8_t | jsfeat.C1_t);
+
+				facedetection_canvas = document.createElement('canvas');
+                facedetection_canvas.width = w;
+                facedetection_canvas.height = h;
+                facedetection_ctx = facedetection_canvas.getContext('2d');
+                ii_sum = new Int32Array((w+1)*(h+1));
+                ii_sqsum = new Int32Array((w+1)*(h+1));
+                ii_tilted = new Int32Array((w+1)*(h+1));
+                ii_canny = new Int32Array((w+1)*(h+1));
+
+				eyemouthdetection_canvas = document.createElement('canvas');
+                eyemouthdetection_canvas.width = eyemouthdetection_work_size;
+                eyemouthdetection_canvas.height = eyemouthdetection_work_size;
+                eyemouthdetection_ctx = eyemouthdetection_canvas.getContext('2d');
+				
+				facecanvas.width = 600;
+				facecanvas.height = 600;
+
+				imageCompare = new MotionDetector.ImageCompare();
+                options = new demo_opt();
+
+				$('#warning_board').hide();
+				$('#recognition_status').hide();
+
+                stat.add("haar detector");
+            }
+
+			refreshbutton.onclick = function(){
+				oldImage = null;
+				currentImage = null;
+				bProcessing = true;
+				bMoveFaceBack = true;
+				bMoveFaceHorizontal = true;
+				bMoveFaceVertical = true;
+				nConsistentStable = 0;
+				nConsistentDark = 0;
+				nConsistentMoveBack = 0;
+				nConsistentMoveHorizontal = 0;
+				nConsistentMoveVertical = 0;
+				$('#warning_board').hide();
+				$('#recognition_status').hide();
+				facecanvas.getContext('2d').clearRect(0, 0, facecanvas.width, facecanvas.height);
+			};
+
+            function tick() {
+                compatibility.requestAnimationFrame(tick);
+                stat.new_frame();
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    ctx.drawImage(video, 0, 0, canvasWidth, canvasHeight);
+					
+					//document.write(" " + ppi);
+                    facedetection_ctx.drawImage(video, 0, 0, facedetection_canvas.width, facedetection_canvas.height);
+                    var imageData = facedetection_ctx.getImageData(0, 0, facedetection_canvas.width, facedetection_canvas.height);
+
+					//////Average Brightness
+					var data = imageData.data;
+					var luma = 0;
+					var count = 0;
+					for(var i = 0; i < data.length; i += 4) 
+					{
+						luma += (data[i] + data[i+1] + data[i+2])/3;
+						count++;
+					}
+					luma = luma / count;
+					
+					var threshold = 50;
+					if(luma < threshold)
+					{
+						if(nConsistentDark > 25)
+						{
+							$('#warning_board').show();
+							$('#warning_board').html('<h4 align=center>Too dark! Please move to a brighter place!</h4>');
+						}
+						nConsistentDark++;
+						return;
+					}
+
+					if(bProcessing == true)
+					{			
+						nConsistentDark = 0;
+						////// Face detection
+						stat.start("haar detector");
+						jsfeat.imgproc.grayscale(imageData.data, facedetection_canvas.width, facedetection_canvas.height, img_u8);
+						if(options.equalize_histogram) {
+							jsfeat.imgproc.equalize_histogram(img_u8, img_u8);
+						}
+						jsfeat.imgproc.compute_integral_image(img_u8, ii_sum, ii_sqsum, classifier.tilted ? ii_tilted : null);
+
+						if(options.use_canny) {
+							jsfeat.imgproc.canny(img_u8, edg, 10, 50);
+							jsfeat.imgproc.compute_integral_image(edg, ii_canny, null, null);
+						}
+
+						jsfeat.haar.edges_density = options.edges_density;
+						var faceRects = jsfeat.haar.detect_multi_scale(ii_sum, ii_sqsum, ii_tilted, options.use_canny? ii_canny : null, img_u8.cols, img_u8.rows, classifier,	options.scale_factor, options.min_scale);
+						faceRects = jsfeat.haar.group_rectangles(faceRects, 1);
+						stat.stop("haar detector");
+
+						// draw only most confident one
+						var bFace = false;
+						var bMouth = false;
+						var bEye = false;
+						var coordMouth, coordEye1, coordEye2;
+						if(faceRects[0])
+						{
+							////// Face positioning
+							var acceptableRatio  = 2.4;
+							if(!bMoveFaceBack)
+								acceptableRatio = 2.0;
+							
+							if(faceRects[0].width * acceptableRatio > img_u8.cols || faceRects[0].height * acceptableRatio > img_u8.rows)
+							{
+								if(nConsistentMoveBack > 10)
+								{
+									$('#warning_board').show();
+									$('#warning_board').html('<h4 align=center>Move back!</h4>');
+								}
+								nConsistentMoveBack++;
+								return;
+							}
+							else
+							{
+								bMoveFaceBack = false;
+								nConsistentMoveBack = 0;
+							
+								var acceptableRightRatio = 0.65;
+								var acceptableLeftRatio = 1.65;
+								if(!bMoveFaceHorizontal)
+								{
+									acceptableRightRatio = 0.4;
+									acceptableLeftRatio = 1.4;
+								}
+
+								if(faceRects[0].x < faceRects[0].width * acceptableRightRatio)
+								{
+									if(nConsistentMoveHorizontal > 10)
+									{
+										$('#warning_board').show();
+										$('#warning_board').html('<h4 align=center>Move your head RIGHT!</h4>');
+									}
+									else
+									{
+										$('#warning_board').hide();
+									}
+									nConsistentMoveHorizontal++;
+									return;
+								}
+								else if(faceRects[0].x > (img_u8.cols - faceRects[0].width * acceptableLeftRatio))
+								{
+									if(nConsistentMoveHorizontal > 10)
+									{
+										$('#warning_board').show();
+										$('#warning_board').html('<h4 align=center>Move your head LEFT!</h4>');
+									}
+									else
+									{
+										$('#warning_board').hide();
+									}
+									nConsistentMoveHorizontal++;
+									return;
+								}
+								bMoveFaceHorizontal = false;
+								nConsistentMoveHorizontal = 0;
+
+								var acceptableUpRatio = 1.62;
+								var acceptableDownRatio = 0.68;
+								if(!bMoveFaceVertical)
+								{
+									acceptableUpRatio = 1.37;
+									acceptableDownRatio = 0.43;
+								}
+								if(faceRects[0].y < faceRects[0].height * acceptableDownRatio)
+								{
+									if(nConsistentMoveVertical > 10)
+									{
+										$('#warning_board').show();
+										$('#warning_board').html('<h4 align=center>Move your head DOWN!</h4>');
+									}
+									else
+									{
+										$('#warning_board').hide();
+									}
+									nConsistentMoveVertical++;
+									return;
+								}
+								else if(faceRects[0].y > (img_u8.rows - faceRects[0].height * acceptableUpRatio))
+								{
+									if(nConsistentMoveVertical > 10)
+									{
+										$('#warning_board').show();
+										$('#warning_board').html('<h4 align=center>Move your head UP!</h4>');
+									}
+									else
+									{
+										$('#warning_board').hide();
+									}
+									nConsistentMoveVertical++;
+									return;
+								}
+								bMoveFaceVertical = false;
+								nConsistentMoveVertical = 0;
+							}
+							//									
+							////// Motion Detection
+							oldImage = currentImage;
+							
+							var motiondetect_canvas = document.createElement('canvas');
+							motiondetect_canvas.width = video.videoWidth;
+							motiondetect_canvas.height = video.videoHeight;
+							motiondetect_canvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);;
+							currentImage = motiondetect_canvas;
+
+							if(!oldImage || !currentImage) {
+								return;
+							}
+							var vals = imageCompare.compare(currentImage, oldImage, motiondetect_width, motiondetect_height);
+							//draw_motionregion(ctx, vals);
+
+							if((vals.bottomRight[0] - vals.topLeft[0]) > 8 || (vals.bottomRight[1] - vals.topLeft[1]) > 8)
+							{
+								nConsistentStable = 0;
+
+								$('#warning_board').show();
+								$('#warning_board').html('<h4 align=center>Don`t move before taking a picture!</h4>');
+
+								return;
+							}
+
+							nConsistentStable++;
+							if(nConsistentStable <= 25)
+							{
+								if(nConsistentStable > 10)
+									$('#warning_board').hide();
+								return;
+							}
+							else
+							{
+								$('#warning_board').hide();
+							}
+							
+							//
+
+							bFace = true;
+							var sc = canvasWidth/img_u8.cols;
+							
+							//////Eye & Mouth Detection
+							eyemouthdetection_ctx.drawImage(video, faceRects[0].x*sc, faceRects[0].y*sc, faceRects[0].width*sc, faceRects[0].height*sc, 0, 0, eyemouthdetection_canvas.width, eyemouthdetection_canvas.height);
+
+							// mouth
+							detector = new objectdetect.detector(eyemouthdetection_canvas.width, eyemouthdetection_canvas.height, 1.2, objectdetect.mouth);
+							var mouthRects = detector.detect(eyemouthdetection_canvas);
+							if(mouthRects[0])
+							{
+								bMouth = true;
+								coordMouth = mouthRects[0];
+
+								// eye
+								detector = new objectdetect.detector(eyemouthdetection_canvas.width, eyemouthdetection_canvas.height, 1.2, objectdetect.eye);
+								var eyeRects = detector.detect(eyemouthdetection_canvas);
+								if(eyeRects[0] && eyeRects[1])
+								{
+									bEye = true;
+									coordEye1 = eyeRects[0];
+									coordEye2 = eyeRects[1];
+										
+									//if mouth is within face region
+									if(coordMouth[1] < coordEye1[1] + coordEye1[3] || coordMouth[1] < coordEye2[1] + coordEye2[3]) 
+									{
+										bMouth = false;
+									}
+									else
+									{
+										bMouth = true;
+									}
+								}
+								else
+								{
+									bEye = false;
+								}
+							}
+							else
+							{
+								bMouth = false;
+							}
+						}
+						else
+						{
+							bFace = false;
+						}
+						
+						if(bFace == true)
+							draw_face(ctx, faceRects[0], canvasWidth/img_u8.cols);
+						if(bMouth == true)
+							draw_mouth(ctx, faceRects[0], sc, coordMouth, faceRects[0].width*sc/eyemouthdetection_canvas.width);
+						if(bEye == true)
+							draw_eyes(ctx, faceRects[0], sc, coordEye1, coordEye2, faceRects[0].width*sc/eyemouthdetection_canvas.width);
+						
+						if(bFace && bMouth && bEye)
+						{
+							bProcessing = false;
+							facecanvas.getContext('2d').drawImage(video, (faceRects[0].x - faceRects[0].width * 0.4) * sc, (faceRects[0].y  - faceRects[0].height * 0.43) * sc, faceRects[0].width * sc * 1.8, faceRects[0].height * sc * 1.8, 0, 0, facecanvas.width, facecanvas.height);
+							$('#recognition_status').show();
+							$('#recognition_status').html('<h4 align=center>Identified a real face!</h4>');
+						}
+					}
+                }
+            }
+
+            function draw_face(ctx, r, sc) {
+                ctx.strokeRect((r.x*sc)|0,(r.y*sc)|0,(r.width*sc)|0,(r.height*sc)|0);
+            }
+
+			function draw_mouth(ctx, fr, scale, r, sc) {
+				ctx.strokeRect((fr.x*scale+r[0]*sc)|0,(fr.y*scale+r[1]*sc)|0,(r[2]*sc)|0,(r[3]*sc)|0);
+			}
+
+			function draw_eyes(ctx, fr, scale, r1, r2, sc) {
+				ctx.strokeRect((fr.x*scale+r1[0]*sc)|0,(fr.y*scale+r1[1]*sc)|0,(r1[2]*sc)|0,(r1[3]*sc)|0);
+				ctx.strokeRect((fr.x*scale+r2[0]*sc)|0,(fr.y*scale+r2[1]*sc)|0,(r2[2]*sc)|0,(r2[3]*sc)|0);
+			}
+			
+			function draw_motionregion(ctx, region)	{
+				var left = region.topLeft[0] * 10;
+				var top = region.topLeft[1] * 10;
+				var width = (region.bottomRight[0] - region.topLeft[0]) * 10;
+				var height = (region.bottomRight[1] - region.topLeft[1]) * 10;
+
+				ctx.strokeRect(left|0, top|0, width|0, height|0);
+			}
+
+            $(window).unload(function() {
+                video.pause();
+                video.src=null;
+            });
+        });
+        </script>
+    </body>
+</html>
