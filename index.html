@@ -7,7 +7,6 @@
         <link rel="stylesheet" href="css/jsfeat.css">
     </head>
     <body>
-		<div id="dpi"></div>
 		<video id="webcam" width="640" height="480" style="display:none;"></video>
 		<div style=" width:640px;height:480px;margin: 10px auto;">
 			<canvas id="canvas" width="640" height="480"></canvas>
@@ -37,6 +36,7 @@
         $(window).load(function() {
             "use strict";
             
+            // Here we're capturing camera
             var video = document.getElementById('webcam');
             var canvas = document.getElementById('canvas');
 			var refreshbutton = document.getElementById('refreshbutton');
@@ -84,45 +84,66 @@
                 $('#no_rtc').html('<h4>Something goes wrong...</h4>');
                 $('#no_rtc').show();
             }
-
-            var stat = new profiler();
 			
-            var gui,options,ctx,canvasWidth,canvasHeight;
-            var img_u8,facedetection_canvas,facedetection_ctx, eyemouthdetection_canvas, eyemouthdetection_ctx, ii_sum,ii_sqsum,ii_tilted,edg,ii_canny;
+            var stat = new profiler();
+            var options, ctx, canvasWidth, canvasHeight;
+            
+            ////// Flag variable for whether to perform the processings
+			var bProcessing = true;
+            
+            ////// Face detection related variables
+            var img_u8, ii_sum, ii_sqsum, ii_tilted, edg, ii_canny;
+            var facedetection_canvas,facedetection_ctx;
+            
+            ////// This controls the size of the frame data for face detection
+            var facedetection_work_size = 160;
             var classifier = jsfeat.haar.frontalface;
 			var detector;
-
-            var facedetection_work_size = 160;
-            var eyemouthdetection_work_size = 140;
-
-			var bProcessing = true;
-
-            var demo_opt = function(){
+			var demo_opt = function(){
                 this.min_scale = 2;
                 this.scale_factor = 1.15;
                 this.use_canny = false;
                 this.edges_density = 0.13;
                 this.equalize_histogram = true;
             }
+            
+            ////// Eye & Mouth detection related variables
+            var eyemouthdetection_canvas, eyemouthdetection_ctx;
+            // This controls the size of the frame data for face detection
+            var eyemouthdetection_work_size = 140;
 
-			//motion detect
+			////// Motion detection related variables
 			var imageCompare;
+			// This controls the size of the frame data for motion detection
 			var motiondetect_width = 64;
 			var motiondetect_height = 48;
-
+			// Previous & Current frames to compare with
 			var currentImage = null;
 			var oldImage = null;
-			//
 			
+			////// Flag variables for setting magic numbers 
+				// (true : set numbers larger)
+				// (false : set numbers smaller)
+			// related with move back
 			var bMoveFaceBack = true;
+			// related with move left/right
 			var bMoveFaceHorizontal = true;
+			// related with move up/down
 			var bMoveFaceVertical = true;
+			
+			////// Eligible consistent frame numbers for displaying guidance
+			// related with brightness measure
 			var nConsistentDark = 0;
+			// related with move back
 			var nConsistentMoveBack = 0;
+			// related with move left/right
 			var nConsistentMoveHorizontal = 0;
+			// related with move up/down
 			var nConsistentMoveVertical = 0;
+			// related with motion detection
 			var nConsistentStable = 0;
-
+			
+			////// Here we initialize variables
             function demo_app(videoWidth, videoHeight) {
                 canvasWidth  = canvas.width;
                 canvasHeight = canvas.height;
@@ -131,11 +152,11 @@
                 ctx.fillStyle = "rgb(0,255,0)";
                 ctx.strokeStyle = "rgb(0,255,0)";
 				ctx.lineWidth = 2;
-
+				
+				// Face detection initialization
                 var scale = Math.min(facedetection_work_size/videoWidth, facedetection_work_size/videoHeight);
                 var w = (videoWidth*scale)|0;
                 var h = (videoHeight*scale)|0;
-
                 img_u8 = new jsfeat.matrix_t(w, h, jsfeat.U8_t | jsfeat.C1_t);
                 edg = new jsfeat.matrix_t(w, h, jsfeat.U8_t | jsfeat.C1_t);
 
@@ -147,24 +168,30 @@
                 ii_sqsum = new Int32Array((w+1)*(h+1));
                 ii_tilted = new Int32Array((w+1)*(h+1));
                 ii_canny = new Int32Array((w+1)*(h+1));
-
+                
+                stat.add("haar detector");
+				
+				// Eye & mouth detection initialization
 				eyemouthdetection_canvas = document.createElement('canvas');
                 eyemouthdetection_canvas.width = eyemouthdetection_work_size;
                 eyemouthdetection_canvas.height = eyemouthdetection_work_size;
                 eyemouthdetection_ctx = eyemouthdetection_canvas.getContext('2d');
 				
+				// Canvas for displaying captured photo
 				facecanvas.width = 600;
 				facecanvas.height = 600;
-
+				
+				// Motion detection initialization
 				imageCompare = new MotionDetector.ImageCompare();
                 options = new demo_opt();
 
+				// Guidance board
 				$('#warning_board').hide();
+				// Recognition result board
 				$('#recognition_status').hide();
-
-                stat.add("haar detector");
             }
-
+			
+			// Here we are restarting capture mode
 			refreshbutton.onclick = function(){
 				oldImage = null;
 				currentImage = null;
@@ -181,44 +208,48 @@
 				$('#recognition_status').hide();
 				facecanvas.getContext('2d').clearRect(0, 0, facecanvas.width, facecanvas.height);
 			};
-
+			
+			// Here we're processing all modules
             function tick() {
                 compatibility.requestAnimationFrame(tick);
                 stat.new_frame();
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     ctx.drawImage(video, 0, 0, canvasWidth, canvasHeight);
-					
-					//document.write(" " + ppi);
-                    facedetection_ctx.drawImage(video, 0, 0, facedetection_canvas.width, facedetection_canvas.height);
-                    var imageData = facedetection_ctx.getImageData(0, 0, facedetection_canvas.width, facedetection_canvas.height);
+                    
+                    // If we're in capture mode we perform processings
+	                if(bProcessing == true)
+					{
+	                    facedetection_ctx.drawImage(video, 0, 0, facedetection_canvas.width, facedetection_canvas.height);
+	                    var imageData = facedetection_ctx.getImageData(0, 0, facedetection_canvas.width, facedetection_canvas.height);
 
-					//////Average Brightness
-					var data = imageData.data;
-					var luma = 0;
-					var count = 0;
-					for(var i = 0; i < data.length; i += 4) 
-					{
-						luma += (data[i] + data[i+1] + data[i+2])/3;
-						count++;
-					}
-					luma = luma / count;
-					
-					var threshold = 50;
-					if(luma < threshold)
-					{
-						if(nConsistentDark > 25)
+						//////Average Brightness
+						var data = imageData.data;
+						var luma = 0;
+						var count = 0;
+						for(var i = 0; i < data.length; i += 4) 
 						{
-							$('#warning_board').show();
-							$('#warning_board').html('<h4 align=center>Too dark! Please move to a brighter place!</h4>');
+							luma += (data[i] + data[i+1] + data[i+2])/3;
+							count++;
 						}
-						nConsistentDark++;
-						return;
-					}
-
-					if(bProcessing == true)
-					{			
-						nConsistentDark = 0;
-						////// Face detection
+						luma = luma / count;
+						
+						// This is for thresholding brightness : the lower the darker. if brightness is smaller than the threshold we consider as dark
+						var threshold = 50;
+						if(luma < threshold)
+						{
+							// If consistent dark frames are over 25, we show the guidance
+							if(nConsistentDark > 25)
+							{
+								$('#warning_board').show();
+								$('#warning_board').html('<h4 align=center>The lighting is not good, please move to a brighter location.</h4>');
+							}
+							nConsistentDark++;
+							return;
+						}
+						else			
+							nConsistentDark = 0;
+						
+						////// Here we're detecting a face
 						stat.start("haar detector");
 						jsfeat.imgproc.grayscale(imageData.data, facedetection_canvas.width, facedetection_canvas.height, img_u8);
 						if(options.equalize_histogram) {
@@ -233,27 +264,40 @@
 
 						jsfeat.haar.edges_density = options.edges_density;
 						var faceRects = jsfeat.haar.detect_multi_scale(ii_sum, ii_sqsum, ii_tilted, options.use_canny? ii_canny : null, img_u8.cols, img_u8.rows, classifier,	options.scale_factor, options.min_scale);
+						// This is for storing detected face regions
 						faceRects = jsfeat.haar.group_rectangles(faceRects, 1);
 						stat.stop("haar detector");
 
-						// draw only most confident one
+						// Flag variables for if face/mouth/eye is detected
 						var bFace = false;
 						var bMouth = false;
 						var bEye = false;
+						
+						// Coordinates for drawing detected regions
 						var coordMouth, coordEye1, coordEye2;
+						
+						// If face is detected
 						if(faceRects[0])
 						{
-							////// Face positioning
+							////// Positioning Guidance
+							// Here we're displaying move back guidance
+							// If we find that "facesize * acceptableRatio < framesize", we consider that user's too near to the camera.
+							// Firstly set to 2.4 and once this works we turn to 2.0 for not flickering guidance
+							// This works the same for all the modules except that the magic numbers are different
+							
+							// This should be larger than the below one
 							var acceptableRatio  = 2.4;
 							if(!bMoveFaceBack)
+								// This should be a bit larger than face cropping magic number which is set to 1.8
 								acceptableRatio = 2.0;
 							
 							if(faceRects[0].width * acceptableRatio > img_u8.cols || faceRects[0].height * acceptableRatio > img_u8.rows)
 							{
+								// If 10 consistent frames are considered as too near, we show the guidance
 								if(nConsistentMoveBack > 10)
 								{
 									$('#warning_board').show();
-									$('#warning_board').html('<h4 align=center>Move back!</h4>');
+									$('#warning_board').html('<h4 align=center>Your a little close, move back.</h4>');
 								}
 								nConsistentMoveBack++;
 								return;
@@ -262,21 +306,27 @@
 							{
 								bMoveFaceBack = false;
 								nConsistentMoveBack = 0;
-							
+								
+								// Here we're displaying move left/right guidance
+								// Magic numbers work the same with "move back" case
 								var acceptableRightRatio = 0.65;
 								var acceptableLeftRatio = 1.65;
 								if(!bMoveFaceHorizontal)
 								{
+									// This is for left padding ratio portional to detected face region
+									// i.e, "facewidth * 0.4" will be padded to LEFT & RIGHT of detected region
 									acceptableRightRatio = 0.4;
 									acceptableLeftRatio = 1.4;
 								}
-
+								
+								// If 10 consistent frames are considered as too near to the horizontal edges, we show the guidance
 								if(faceRects[0].x < faceRects[0].width * acceptableRightRatio)
 								{
+									// Move Right
 									if(nConsistentMoveHorizontal > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head RIGHT!</h4>');
+										$('#warning_board').html('<h4 align=center>Please move to the right just a little</h4>');
 									}
 									else
 									{
@@ -287,10 +337,11 @@
 								}
 								else if(faceRects[0].x > (img_u8.cols - faceRects[0].width * acceptableLeftRatio))
 								{
+									// Move Left
 									if(nConsistentMoveHorizontal > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head LEFT!</h4>');
+										$('#warning_board').html('<h4 align=center>Please move to the left just a little.</h4>');
 									}
 									else
 									{
@@ -301,20 +352,27 @@
 								}
 								bMoveFaceHorizontal = false;
 								nConsistentMoveHorizontal = 0;
-
+								
+								// Here we're displaying move up/down guidance
+								// Magic numbers work the same with "move back" case
 								var acceptableUpRatio = 1.62;
 								var acceptableDownRatio = 0.68;
 								if(!bMoveFaceVertical)
 								{
+									// This is for left padding ratio portional to detected face region
+									// i.e, "facewidth * 0.43" will be padded to the BOTTOM & "facewidth * 0.37" will be padded to the UP of detected region
 									acceptableUpRatio = 1.37;
 									acceptableDownRatio = 0.43;
 								}
+								
+								// If 10 consistent frames are considered as too near to the vertical edges, we show the guidance
 								if(faceRects[0].y < faceRects[0].height * acceptableDownRatio)
 								{
+									// Move down
 									if(nConsistentMoveVertical > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head DOWN!</h4>');
+										$('#warning_board').html('<h4 align=center>I can't see you well, please raise your head a little.</h4>');
 									}
 									else
 									{
@@ -325,10 +383,11 @@
 								}
 								else if(faceRects[0].y > (img_u8.rows - faceRects[0].height * acceptableUpRatio))
 								{
+									// Move up
 									if(nConsistentMoveVertical > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head UP!</h4>');
+										$('#warning_board').html('<h4 align=center>I can't see you well, please raise your head a little.</h4>');
 									}
 									else
 									{
@@ -340,10 +399,9 @@
 								bMoveFaceVertical = false;
 								nConsistentMoveVertical = 0;
 							}
-							//									
-							////// Motion Detection
+
+							////// Here we're performing Motion Detection
 							oldImage = currentImage;
-							
 							var motiondetect_canvas = document.createElement('canvas');
 							motiondetect_canvas.width = video.videoWidth;
 							motiondetect_canvas.height = video.videoHeight;
@@ -353,22 +411,25 @@
 							if(!oldImage || !currentImage) {
 								return;
 							}
+							
+							// this variable is for storing the region of detected motion
 							var vals = imageCompare.compare(currentImage, oldImage, motiondetect_width, motiondetect_height);
-							//draw_motionregion(ctx, vals);
-
+							
+							// Here motion detection magic numbers go
+							// if the motion covers larger than 8 among (48 or 64 - set above), we display the guidance not to move
 							if((vals.bottomRight[0] - vals.topLeft[0]) > 8 || (vals.bottomRight[1] - vals.topLeft[1]) > 8)
 							{
 								nConsistentStable = 0;
-
 								$('#warning_board').show();
-								$('#warning_board').html('<h4 align=center>Don`t move before taking a picture!</h4>');
-
+								$('#warning_board').html('<h4 align=center>Looking good, hold still while we take the picture!</h4>');
 								return;
 							}
 
 							nConsistentStable++;
+							// If 25 consistent frames are considered as "stable - not moving" we move to the next module, otherwise wait until it reaches up to 25.
 							if(nConsistentStable <= 25)
 							{
+								// If 10 consistent frames are considered as "stable", we hide the guidance
 								if(nConsistentStable > 10)
 									$('#warning_board').hide();
 								return;
@@ -378,32 +439,35 @@
 								$('#warning_board').hide();
 							}
 							
-							//
-
+							////// Here we're performing Eye & Mouth Detection
 							bFace = true;
 							var sc = canvasWidth/img_u8.cols;
-							
-							//////Eye & Mouth Detection
 							eyemouthdetection_ctx.drawImage(video, faceRects[0].x*sc, faceRects[0].y*sc, faceRects[0].width*sc, faceRects[0].height*sc, 0, 0, eyemouthdetection_canvas.width, eyemouthdetection_canvas.height);
 
-							// mouth
+							// mouth detection
 							detector = new objectdetect.detector(eyemouthdetection_canvas.width, eyemouthdetection_canvas.height, 1.2, objectdetect.mouth);
+							// This variable is for storing detected mouth region
 							var mouthRects = detector.detect(eyemouthdetection_canvas);
+							
+							// if mouth is detected
 							if(mouthRects[0])
 							{
 								bMouth = true;
 								coordMouth = mouthRects[0];
 
-								// eye
+								// eye detection
 								detector = new objectdetect.detector(eyemouthdetection_canvas.width, eyemouthdetection_canvas.height, 1.2, objectdetect.eye);
+								// This variable is for storing detected eye regions
 								var eyeRects = detector.detect(eyemouthdetection_canvas);
+								
+								// if eyes are detected
 								if(eyeRects[0] && eyeRects[1])
 								{
 									bEye = true;
 									coordEye1 = eyeRects[0];
 									coordEye2 = eyeRects[1];
 										
-									//if mouth is within face region
+									//we consider as "mouth detected" only when mouth region is within face region
 									if(coordMouth[1] < coordEye1[1] + coordEye1[3] || coordMouth[1] < coordEye2[1] + coordEye2[3]) 
 									{
 										bMouth = false;
@@ -428,6 +492,7 @@
 							bFace = false;
 						}
 						
+						// Draw detected regions to the canvas
 						if(bFace == true)
 							draw_face(ctx, faceRects[0], canvasWidth/img_u8.cols);
 						if(bMouth == true)
@@ -435,30 +500,37 @@
 						if(bEye == true)
 							draw_eyes(ctx, faceRects[0], sc, coordEye1, coordEye2, faceRects[0].width*sc/eyemouthdetection_canvas.width);
 						
+						// If all are detected, we cut out a photo from the frame and set the processing flag as FALSE
 						if(bFace && bMouth && bEye)
 						{
 							bProcessing = false;
+							// Here photo cutting magic numbers go
+							// We crop 1.8 * 1.8 times of detected face region("0.4 & 0.4" for "left & right" padding AND "0.43 & 0.37" for "up & bottom" padding,)
 							facecanvas.getContext('2d').drawImage(video, (faceRects[0].x - faceRects[0].width * 0.4) * sc, (faceRects[0].y  - faceRects[0].height * 0.43) * sc, faceRects[0].width * sc * 1.8, faceRects[0].height * sc * 1.8, 0, 0, facecanvas.width, facecanvas.height);
 							$('#recognition_status').show();
-							$('#recognition_status').html('<h4 align=center>Identified a real face!</h4>');
+							$('#recognition_status').html('<h4 align=center>Found you, you look great!</h4>');
 						}
 					}
                 }
             }
-
+			
+			// Function for drawing face region
             function draw_face(ctx, r, sc) {
                 ctx.strokeRect((r.x*sc)|0,(r.y*sc)|0,(r.width*sc)|0,(r.height*sc)|0);
             }
 
+			// Function for drawing mouth region
 			function draw_mouth(ctx, fr, scale, r, sc) {
 				ctx.strokeRect((fr.x*scale+r[0]*sc)|0,(fr.y*scale+r[1]*sc)|0,(r[2]*sc)|0,(r[3]*sc)|0);
 			}
-
+			
+			// Function for drawing eye region
 			function draw_eyes(ctx, fr, scale, r1, r2, sc) {
 				ctx.strokeRect((fr.x*scale+r1[0]*sc)|0,(fr.y*scale+r1[1]*sc)|0,(r1[2]*sc)|0,(r1[3]*sc)|0);
 				ctx.strokeRect((fr.x*scale+r2[0]*sc)|0,(fr.y*scale+r2[1]*sc)|0,(r2[2]*sc)|0,(r2[3]*sc)|0);
 			}
 			
+			// Function for drawing motion region - this is just for test case to see how motion detection works.
 			function draw_motionregion(ctx, region)	{
 				var left = region.topLeft[0] * 10;
 				var top = region.topLeft[1] * 10;
