@@ -241,7 +241,7 @@
 							if(nConsistentDark > 25)
 							{
 								$('#warning_board').show();
-								$('#warning_board').html('<h4 align=center>Too dark! Please move to a brighter place!</h4>');
+								$('#warning_board').html('<h4 align=center>The lighting is not good, please move to a brighter location.</h4>');
 							}
 							nConsistentDark++;
 							return;
@@ -297,7 +297,7 @@
 								if(nConsistentMoveBack > 10)
 								{
 									$('#warning_board').show();
-									$('#warning_board').html('<h4 align=center>Move back!</h4>');
+									$('#warning_board').html('<h4 align=center>Your a little close, move back.</h4>');
 								}
 								nConsistentMoveBack++;
 								return;
@@ -326,7 +326,7 @@
 									if(nConsistentMoveHorizontal > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head RIGHT!</h4>');
+										$('#warning_board').html('<h4 align=center>Please move to the right just a little</h4>');
 									}
 									else
 									{
@@ -341,7 +341,7 @@
 									if(nConsistentMoveHorizontal > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head LEFT!</h4>');
+										$('#warning_board').html('<h4 align=center>Please move to the left just a little.</h4>');
 									}
 									else
 									{
@@ -372,7 +372,7 @@
 									if(nConsistentMoveVertical > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head DOWN!</h4>');
+										$('#warning_board').html('<h4 align=center>I can't see you well, please raise your head a little.</h4>');
 									}
 									else
 									{
@@ -387,7 +387,7 @@
 									if(nConsistentMoveVertical > 10)
 									{
 										$('#warning_board').show();
-										$('#warning_board').html('<h4 align=center>Move your head UP!</h4>');
+										$('#warning_board').html('<h4 align=center>I can't see you well, please raise your head a little.</h4>');
 									}
 									else
 									{
@@ -421,7 +421,7 @@
 							{
 								nConsistentStable = 0;
 								$('#warning_board').show();
-								$('#warning_board').html('<h4 align=center>Don`t move before taking a picture!</h4>');
+								$('#warning_board').html('<h4 align=center>Looking good, hold still while we take the picture!</h4>');
 								return;
 							}
 
@@ -508,7 +508,7 @@
 							// We crop 1.8 * 1.8 times of detected face region("0.4 & 0.4" for "left & right" padding AND "0.43 & 0.37" for "up & bottom" padding,)
 							facecanvas.getContext('2d').drawImage(video, (faceRects[0].x - faceRects[0].width * 0.4) * sc, (faceRects[0].y  - faceRects[0].height * 0.43) * sc, faceRects[0].width * sc * 1.8, faceRects[0].height * sc * 1.8, 0, 0, facecanvas.width, facecanvas.height);
 							$('#recognition_status').show();
-							$('#recognition_status').html('<h4 align=center>Identified a real face!</h4>');
+							$('#recognition_status').html('<h4 align=center>Found you, you look great!</h4>');
 						}
 					}
                 }
